@@ -116,7 +116,7 @@ my @ngx_rpaths;
 my $cc;
 my $cores;
 my $luajit_xcflags = '';
-
+my @build_srcs=('');
 my (@ngx_opts, @ngx_cc_opts, @ngx_ld_opts);
 
 for my $opt (@ARGV) {
