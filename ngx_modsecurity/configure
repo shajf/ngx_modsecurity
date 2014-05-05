@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use File::Spec;
 
 sub usage ($);
 
@@ -9,6 +10,7 @@ my $root_dir = `pwd`;
 chomp $root_dir;
 my $OS = $^O;
 my $ngx_dir;
+my @build_srcs=('lua','LuaJIT','nginx','modsecurity');
 
 sub cd {
     my $dir = shift;
@@ -116,7 +118,6 @@ my @ngx_rpaths;
 my $cc;
 my $cores;
 my $luajit_xcflags = '';
-my @build_srcs=('');
 my (@ngx_opts, @ngx_cc_opts, @ngx_ld_opts);
 
 for my $opt (@ARGV) {
@@ -324,7 +325,12 @@ _END_
         die "file \"build\" already exists. please remove it first.\n";
     }
 
-    shell "cp -rp bundle/ build";
+    shell "mkdir build";
+    
+    for my $src (@build_srcs){
+	my $m_dir = auto_complete $src;
+	shell "cp -r $m_dir build";
+    }
 
     cd 'build';
 
@@ -458,16 +464,16 @@ _END_
 
         my $lualib_prefix = "$prefix/lualib";
 
-        my $ngx_lua_dir = auto_complete 'ngx_lua';
+        my $ngx_modsec_dir = auto_complete 'modsecurity';
 
-        open my $in, ">>$ngx_lua_dir/config" or
-            die "Cannot open $ngx_lua_dir/config for appending: $!\n";
+        open my $in, ">>$ngx_modsec_dir/config" or
+            die "Cannot open $ngx_modsec_dir/config for appending: $!\n";
 
         print $in <<"_EOC_";
 
-ngx_lua_dquote='"'
-CFLAGS="\$CFLAGS -DLUA_DEFAULT_PATH='\$ngx_lua_dquote$lualib_prefix/?.lua;$lualib_prefix/?/init.lua\$ngx_lua_dquote'"
-CFLAGS="\$CFLAGS -DLUA_DEFAULT_CPATH='\$ngx_lua_dquote$lualib_prefix/?.so\$ngx_lua_dquote'"
+ngx_modsec_dquote='"'
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_PATH='\$ngx_modsec_dquote$lualib_prefix/?.lua;$lualib_prefix/?/init.lua\$ngx_modsec_dquote'"
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_CPATH='\$ngx_modsec_dquote$lualib_prefix/?.so\$ngx_modsec_dquote'"
 _EOC_
 
         close $in;
@@ -494,6 +500,7 @@ _EOC_
     }
 
     return $opts_line;
+}
 }
 
 sub usage ($) {
