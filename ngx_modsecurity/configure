@@ -1,3 +1,22 @@
-#!/bin/sh
-# Copyright (C) jianfeng sha
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use File:Spec;
+
+sub shell ($@);
+sub env ($$);
+sub cd ($);
+sub auto_complete ($);
+sub usage ($);
+sub trim ($);
+
+my (@make_cmds,@make_install_cmds);
+my $root_dir = `pwd`;
+chomp $root_dir;
+my $OS = $^O;
+my $ngx_dir;
+
+if (-f 'Makefile'){
+    unlink 'Makefile' or die "ERROR: failed to remove existed Makefile:$!\n";
+}
 
