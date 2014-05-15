@@ -1,14 +1,8 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
-use File:Spec;
 
-sub shell ($@);
-sub env ($$);
-sub cd ($);
-sub auto_complete ($);
 sub usage ($);
-sub trim ($);
 
 my (@make_cmds,@make_install_cmds);
 my $root_dir = `pwd`;
@@ -19,4 +13,322 @@ my $ngx_dir;
 if (-f 'Makefile'){
     unlink 'Makefile' or die "ERROR: failed to remove existed Makefile:$!\n";
 }
+
+sub cd {
+    my $dir = shift;
+    print("enter $dir .......................................\n");
+    chdir $dir or die "failed to enter $dir:$!\n";
+}
+
+sub shell {
+    my ($cmd,$dry_run) = @_;
+    print("runing cmd::$cmd .....................................\n");
+    unless ($dry_run) {
+        system($cmd) == 0 or die "ERROR: failed to run command:$cmd\n";
+    }
+}
+
+sub trim {
+    my $cmd = shift;
+    $cmd =~ s/\n.*/.../s;
+    $cmd;
+}
+
+sub env {
+    my ($key,$val) = @_;
+    print "export $key='$val'\n";
+    $ENV{$key} = $val;
+}
+
+sub auto_complete {
+    my $name = shift;
+    my @dirs = glob "$name-[0-9]*" or 
+        die "No source dir found for $name\n";
+
+    if (@dirs > 1) {
+        die "More than one hits for $name: @dirs\n";
+    }
+
+    return $dirs[0];
+}
+
+sub can_run {
+    my ($cmd) = @_;
+
+    #warn "can run: @_\n";
+    my $_cmd = $cmd;
+    return $_cmd if -x $_cmd;
+
+    return undef if $_cmd =~ m{[\\/]};
+
+    # FIXME: this is a hack; MSWin32 is not supported anyway
+    my $path_sep = ':';
+
+    for my $dir ((split /$path_sep/, $ENV{PATH}), '.') {
+        next if $dir eq '';
+        my $abs = File::Spec->catfile($dir, $_[0]);
+        return $abs if -x $abs;
+    }
+
+    return undef;
+}
+
+
+sub  build_security_opts {
+    my $opts = shift;
+    my $make;
+
+    if ($opts->{make}) {
+        $make = $opts->{make};
+        if (! can_run($make)) {
+            die "make utility $make cannot be run.\n";
+        }
+
+    } else {
+        if (can_run("gmake")) {
+            $make = 'gmake';
+
+        } else {
+            # no gmake found
+
+            if ($platform =~ /bsd/i) {
+                die "error: I cannot find \"gmake\" (Gnu make) in your PATH ".
+                    "envirnonment. You can also specify your make by the ".
+                    "--with-make=PATH option\n";
+            }
+
+            if (can_run("make")) {
+                $make = "make";
+
+            } else {
+                die "No gmake nor make found in PATH.\n";
+            }
+        }
+    }
+
+    $postamble .= <<"_END_";
+Type the following commands to build and install:
+    $make
+    $make install
+_END_
+
+    if (!$opts->{lua}
+        && !$opts->{lua_path}
+        && !$opts->{luajit_path})
+    {
+        $opts->{luajit} = 1;
+    }
+
+    if ($opts->{luajit} && $opts->{luajit_path}) {
+        die "--with-luajit and --with-luajit=PATH are mutually exclusive.\n";
+    }
+
+    if ($opts->{no_http_ssl} && $opts->{http_ssl}) {
+        die "--with-http_ssl_module conflicts with --without-http_ssl_module.\n";
+    }
+
+    if (! $opts->{no_http_ssl} && ! $opts->{http_ssl}) {
+        $opts->{http_ssl} = 1;
+        push @ngx_opts, '--with-http_ssl_module';
+    }
+
+    if ($platform eq 'linux' && $opts->{luajit} && ! can_run("ldconfig")) {
+        die "you need to have ldconfig in your PATH env when enabling luajit.\n";
+    }
+
+    my $opts_line = '';
+
+    if ($opts->{debug}) {
+        #unshift @ngx_cc_opts, '-O0';
+        $opts_line .= " \\\n  --with-debug";
+
+    } else {
+        #unshift @ngx_cc_opts, '-O2';
+    }
+
+    if (@ngx_cc_opts) {
+        $opts_line .= " \\\n  --with-cc-opt='@ngx_cc_opts'";
+    }
+
+    if (-d 'build') {
+        system("rm -rf build") == 0 or
+            die "failed to remove directory build/.\n";
+    }
+
+    if (-f 'build') {
+        die "file \"build\" already exists. please remove it first.\n";
+    }
+
+    shell "cp -rp bundle/ build";
+
+    cd 'build';
+
+    # build 3rd-party C libraries if required
+
+    if ($opts->{luajit_path}) {
+        my $luajit_prefix = $opts->{luajit_path};
+        env LUAJIT_LIB => "$luajit_prefix/lib";
+        env LUAJIT_INC => "$luajit_prefix/include/luajit-2.1";
+
+        push @ngx_rpaths, "$luajit_prefix/lib";
+
+    } elsif ($opts->{luajit}) {
+        my $luajit_src = auto_complete 'LuaJIT';
+        my $luajit_prefix = "$prefix/luajit";
+        my $luajit_root = File::Spec->rel2abs("luajit-root");
+
+        if (-d $luajit_root) {
+            shell "rm -rf $luajit_root";
+        }
+
+        mkdir $luajit_root or
+            die "create create directory luajit-root: $!\n";
+
+        cd $luajit_src;
+
+        my $extra_opts = ' TARGET_STRIP=@: CCDEBUG=-g';
+
+        if ($opts->{debug}) {
+            $luajit_xcflags .= " -DLUA_USE_APICHECK -DLUA_USE_ASSERT";
+            $luajit_xcflags =~ s/^ +//;
+            $extra_opts .= qq{ Q= XCFLAGS='$luajit_xcflags'};
+
+        } else {
+            if ($luajit_xcflags) {
+                $luajit_xcflags =~ s/^ +//;
+                $extra_opts .= qq{ XCFLAGS='$luajit_xcflags'};
+            }
+        }
+
+        #if ($platform =~ /bsd/i) {
+        #$extra_opts .= ' CFLAGS=-I..';
+        #}
+
+        if ($on_solaris) {
+            $extra_opts .= " INSTALL_X='$root_dir/build/install -m 0755' " .
+                    "INSTALL_F='$root_dir/build/install -m 0644'";
+        }
+
+        if (defined $cc) {
+            $extra_opts .= " CC='$cc'";
+        }
+
+        if (defined $cores) {
+            shell "${make} -j$cores$extra_opts PREFIX=$luajit_prefix", $dry_run;
+        } else {
+            shell "${make}$extra_opts PREFIX=$luajit_prefix", $dry_run;
+        }
+
+        shell "${make} install$extra_opts PREFIX=$luajit_prefix DESTDIR=$luajit_root", $dry_run;
+
+        push @make_cmds, "cd $root_dir/build/$luajit_src && "
+            . "\$(MAKE)$extra_opts PREFIX=$luajit_prefix";
+
+        push @make_install_cmds, "cd $root_dir/build/$luajit_src && "
+            . "\$(MAKE) install$extra_opts PREFIX=$luajit_prefix DESTDIR=\$(DESTDIR)";
+
+        env LUAJIT_LIB => "$luajit_root$luajit_prefix/lib";
+        env LUAJIT_INC => "$luajit_root$luajit_prefix/include/luajit-2.1";
+
+        push @ngx_rpaths, "$luajit_prefix/lib";
+
+        cd '..';
+
+    } elsif ($opts->{lua_path}) {
+        my $lua_prefix = $opts->{lua_path};
+        env LUA_LIB => "$lua_prefix/lib";
+        env LUA_INC => "$lua_prefix/include";
+
+        push @ngx_rpaths, "$lua_prefix/lib";
+
+    } elsif ($opts->{lua}) {
+        # build stdandard lua
+
+        my $lua_src = auto_complete 'lua';
+
+        if (!defined $lua_src) {
+            die "No lua5 found";
+        }
+
+        my $lua_prefix = "$prefix/lua";
+        my $lua_root = File::Spec->rel2abs("lua-root");
+
+        if (-d $lua_root) {
+            shell "rm -rf $lua_root";
+        }
+
+        mkdir $lua_root or
+            die "create create directory lua-root: $!\n";
+
+        cd $lua_src;
+
+        my $extra_opts = '';
+        if (defined $cc) {
+            $extra_opts .= " CC='$cc'";
+        }
+
+        if (defined $cores) {
+            shell "${make} -j$cores$extra_opts $platform", $dry_run;
+        } else {
+            shell "${make}$extra_opts $platform", $dry_run;
+        }
+
+        shell "${make} install$extra_opts INSTALL_TOP=$lua_root$lua_prefix", $dry_run;
+
+        env LUA_LIB => "$lua_root$lua_prefix/lib";
+        env LUA_INC => "$lua_root$lua_prefix/include";
+
+        push @make_cmds, "cd $root_dir/build/$lua_src && \$(MAKE)$extra_opts $platform";
+
+        push @make_install_cmds, "cd $root_dir/build/$lua_src && "
+            . "\$(MAKE) install$extra_opts INSTALL_TOP=\$(DESTDIR)$lua_prefix";
+
+        cd '..';
+    }
+
+    if ($opts->{lua} || $opts->{lua_path}
+        || $opts->{luajit} || $opts->{luajit_path})
+    {
+        # build lua modules
+
+        my $lualib_prefix = "$prefix/lualib";
+
+        my $ngx_lua_dir = auto_complete 'ngx_lua';
+
+        open my $in, ">>$ngx_lua_dir/config" or
+            die "Cannot open $ngx_lua_dir/config for appending: $!\n";
+
+        print $in <<"_EOC_";
+
+ngx_lua_dquote='"'
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_PATH='\$ngx_lua_dquote$lualib_prefix/?.lua;$lualib_prefix/?/init.lua\$ngx_lua_dquote'"
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_CPATH='\$ngx_lua_dquote$lualib_prefix/?.so\$ngx_lua_dquote'"
+_EOC_
+
+        close $in;
+
+    # prepare nginx configure line
+
+    $ngx_dir = auto_complete "nginx";
+
+    cd $ngx_dir;
+
+    for my $mod (@modules) {
+        my ($name, $prefix, $attr) = @$mod;
+
+        if ($attr && $attr eq 'disabled') {
+            next if not $opts->{"$name"};
+
+        } else {
+            next if $opts->{"no_$name"};
+        }
+
+        my $dir = auto_complete "../$prefix";
+
+        $opts_line .= " \\\n  --add-module=$dir";
+    }
+
+    return $opts_line;
+}
+
 
