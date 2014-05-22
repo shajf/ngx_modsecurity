@@ -19,4 +19,19 @@
 #include <ngx_core.h>
 
 
+typedef struct ngx_security_engine_s ngx_security_engine_t;
+typedef struct ngx_security_context_s ngx_security_context_t;
+
+
+struct ngx_security_engine_s {
+
+};
+
+
+struct ngx_security_context_s {
+
+};
+
+
+
 #endif /*NGX_SECURITY_H*/
