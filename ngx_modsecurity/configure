@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use File::Spec;
 
 sub usage ($);
 
@@ -9,10 +10,7 @@ my $root_dir = `pwd`;
 chomp $root_dir;
 my $OS = $^O;
 my $ngx_dir;
-
-if (-f 'Makefile'){
-    unlink 'Makefile' or die "ERROR: failed to remove existed Makefile:$!\n";
-}
+my @build_srcs=('lua','LuaJIT','nginx','modsecurity');
 
 sub cd {
     my $dir = shift;
@@ -73,6 +71,174 @@ sub can_run {
     return undef;
 }
 
+if (-f 'Makefile'){
+    unlink 'Makefile' or die "ERROR: failed to remove existed Makefile:$!\n";
+}
+
+for my $opt (@ARGV) {
+    if ($opt =~ /^--platform=(.*)/) {
+        $OS = $1;
+        undef $opt;
+    }
+}
+
+my ($platform, $on_solaris);
+
+if ($OS =~ /solaris|sunos/i) {
+    $platform = 'solaris';
+    $on_solaris = $platform;
+
+} elsif ($OS eq 'linux') {
+    $platform = $OS;
+
+} elsif ($OS eq 'MSWin32') {
+    die "MS Windows not supported. Abort.\n";
+
+} elsif ($OS =~ /^(?:MacOS|darwin|rhapsody)$/) {
+    $platform = 'macosx';
+
+} elsif ($OS eq 'freebsd') {
+    $platform = $OS;
+
+} elsif ($OS =~ /^(?:openbsd|netbsd|dragonfly)$/) {
+    $platform = 'bsd';
+
+} else {
+    $platform = 'posix';
+}
+
+my @modules = (
+    [ngx_security => 'modsecurity']
+);
+
+my $prefix = '/usr/local/modsecurity';
+my %modsecurity_opts;
+my $dry_run;
+my @ngx_rpaths;
+my $cc;
+my $cores;
+my $luajit_xcflags = '';
+my (@ngx_opts, @ngx_cc_opts, @ngx_ld_opts);
+
+for my $opt (@ARGV) {
+    next unless defined $opt;
+
+    if ($opt =~ /^-j(\d+)/) {
+        $cores = $1;
+        next;
+    }
+
+    if ($opt =~ /^--with-cc=(.+)/) {
+        $cc = $1;
+        push @ngx_opts, "'$opt'";
+        next;
+    }
+
+    if ($opt eq '--dry-run') {
+        $dry_run = 1;
+        next;
+    }
+
+    if ($opt =~ /^--with-make=(.*)/) {
+        $modsecurity_opts{make} = $1;
+        next;
+    }
+
+    if ($opt =~ /^--prefix=(.*)/) {
+        $prefix = $1;
+
+    } elsif ($opt eq '--without-lua51') {
+        undef $modsecurity_opts{lua};
+
+    } elsif ($opt eq '--with-lua51') {
+        $modsecurity_opts{lua} = 1;
+
+    } elsif ($opt =~ /^--with-lua51=(.*)/) {
+        $modsecurity_opts{lua_path} = $1;
+
+    } elsif ($opt eq '--with-debug') {
+        $modsecurity_opts{debug} = 1;
+
+    } elsif ($opt eq '--help') {
+        usage 0;
+
+    } elsif ($opt =~ /^--with-cc-opt=(.*)/) {
+        push @ngx_cc_opts, $1;
+
+    } elsif ($opt =~ /^--with-ld-opt=(.*)/) {
+        push @ngx_ld_opts, $1;
+    } elsif ($opt eq '--with-luajit') {
+        $modsecurity_opts{luajit} = 1;
+
+    } elsif ($opt =~ /^--with-luajit=(.*)/) {
+        $modsecurity_opts{luajit_path} = $1;
+
+    } elsif ($opt =~ /^--with-luajit-xcflags=(.*)/) {
+        $luajit_xcflags .= " $1";
+
+    }  elsif ($opt eq '--with-http_ssl_module') {
+        $modsecurity_opts{http_ssl} = 1;
+        push @ngx_opts, $opt;
+    } elsif ($opt eq '--without-http_ssl_module') {
+        $modsecurity_opts{no_http_ssl} = 1;
+
+    } elsif ($opt =~ /^--add-module=(.*)/) {
+
+        my $mod_path = File::Spec->rel2abs($1);
+        push @ngx_opts, "--add-module=$mod_path";
+
+    } elsif ($opt =~ /^--with-(openssl|pcre|zlib|libatomic|md5|sha1)=(.*)/) {
+
+        my $path = File::Spec->rel2abs($2);
+        push @ngx_opts, "--with-$1=$path";
+
+    } elsif ($opt =~ /^--\w.*/) {
+        push @ngx_opts, $opt;
+
+    } else {
+        die "Invalid option $opt\n";
+    }
+}
+
+print "platform: $platform ($OS)\n";
+
+my $ngx_prefix = "$prefix/nginx";
+
+my $postamble = '';
+
+my $modsecurity_opts = build_security_opts(\%modsecurity_opts);
+
+if (@ngx_rpaths) {
+    unshift @ngx_ld_opts, "-Wl,-rpath," . join(":", @ngx_rpaths);
+}
+
+my $ld_opts = '';
+if (@ngx_ld_opts) {
+    $ld_opts = " \\\n  --with-ld-opt='@ngx_ld_opts'";
+}
+
+my $cmd = "./configure --prefix=$ngx_prefix"
+    . $modsecurity_opts
+    . $ld_opts
+    . (@ngx_opts ? " \\\n  @ngx_opts" : "");
+    ;
+
+shell $cmd, $dry_run;
+
+push @make_cmds, "cd $root_dir/build/$ngx_dir && "
+    . "\$(MAKE)";
+
+push @make_install_cmds, "cd $root_dir/build/$ngx_dir && "
+    . "\$(MAKE) install DESTDIR=\$(DESTDIR)";
+
+cd '../..'; # to the root
+#die "pwd: " .. `pwd`;
+
+gen_makefile();
+
+if ($postamble) {
+    print $postamble;
+}
 
 sub  build_security_opts {
     my $opts = shift;
@@ -159,7 +325,12 @@ _END_
         die "file \"build\" already exists. please remove it first.\n";
     }
 
-    shell "cp -rp bundle/ build";
+    shell "mkdir build";
+    
+    for my $src (@build_srcs){
+	my $m_dir = auto_complete $src;
+	shell "cp -r $m_dir build";
+    }
 
     cd 'build';
 
@@ -293,16 +464,16 @@ _END_
 
         my $lualib_prefix = "$prefix/lualib";
 
-        my $ngx_lua_dir = auto_complete 'ngx_lua';
+        my $ngx_modsec_dir = auto_complete 'modsecurity';
 
-        open my $in, ">>$ngx_lua_dir/config" or
-            die "Cannot open $ngx_lua_dir/config for appending: $!\n";
+        open my $in, ">>$ngx_modsec_dir/config" or
+            die "Cannot open $ngx_modsec_dir/config for appending: $!\n";
 
         print $in <<"_EOC_";
 
-ngx_lua_dquote='"'
-CFLAGS="\$CFLAGS -DLUA_DEFAULT_PATH='\$ngx_lua_dquote$lualib_prefix/?.lua;$lualib_prefix/?/init.lua\$ngx_lua_dquote'"
-CFLAGS="\$CFLAGS -DLUA_DEFAULT_CPATH='\$ngx_lua_dquote$lualib_prefix/?.so\$ngx_lua_dquote'"
+ngx_modsec_dquote='"'
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_PATH='\$ngx_modsec_dquote$lualib_prefix/?.lua;$lualib_prefix/?/init.lua\$ngx_modsec_dquote'"
+CFLAGS="\$CFLAGS -DLUA_DEFAULT_CPATH='\$ngx_modsec_dquote$lualib_prefix/?.so\$ngx_modsec_dquote'"
 _EOC_
 
         close $in;
@@ -330,5 +501,192 @@ _EOC_
 
     return $opts_line;
 }
+}
 
+sub usage ($) {
+    my $retval = shift;
+    my $msg = <<'_EOC_';
+  --help                             this message
+
+  --prefix=PATH                      set the installation prefix
+
+  --with-debug                       enable the debugging logging and also enable -O0 -g for gcc.
+                                     this not only affects nginx, but also other components.
+
+  -jN                                pass -jN option to make while building the bundled
+                                     Lua 5.1 interpreter or LuaJIT 2.1.
+
+_EOC_
+
+    my $opt_max_len = 512;
+
+    #warn "opt max len: $opt_max_len";
+
+    $msg .= <<'_EOC_';
+  --without-http_ssl_module          disable ngx_http_ssl_module
+
+_EOC_
+
+    $msg .= <<'_EOC_';
+
+  --with-lua51                       enable and build the bundled standard Lua 5.1 interpreter
+  --without-lua51                    disable the bundled standard Lua 5.1 interpreter
+  --with-lua51=PATH                  specify the external installation of Lua 5.1 by PATH
+  --with-luajit                      enable and build the bundled LuaJIT 2.1 (the default)
+  --with-luajit=PATH                 use the external LuaJIT 2.1 installation specified by PATH
+  --with-luajit-xcflags=FLAGS        Specify extra C compiler flags for LuaJIT 2.1
+
+  --sbin-path=PATH                   set nginx binary pathname
+  --conf-path=PATH                   set nginx.conf pathname
+  --error-log-path=PATH              set error log pathname
+  --pid-path=PATH                    set nginx.pid pathname
+  --lock-path=PATH                   set nginx.lock pathname
+  --tapset-prefix=PATH               set systemtap tapset directory prefix
+  --stap-nginx-path=PATH             set stap-nginx pathname
+
+  --user=USER                        set non-privileged user for
+                                     worker processes
+  --group=GROUP                      set non-privileged group for
+                                     worker processes
+
+  --builddir=DIR                     set the build directory
+
+  --with-rtsig_module                enable rtsig module
+  --with-select_module               enable select module
+  --without-select_module            disable select module
+  --with-poll_module                 enable poll module
+  --without-poll_module              disable poll module
+
+  --with-file-aio                    enable file aio support
+  --with-ipv6                        enable ipv6 support
+
+  --with-http_realip_module          enable ngx_http_realip_module
+  --with-http_addition_module        enable ngx_http_addition_module
+  --with-http_xslt_module            enable ngx_http_xslt_module
+  --with-http_image_filter_module    enable ngx_http_image_filter_module
+  --with-http_geoip_module           enable ngx_http_geoip_module
+  --with-http_sub_module             enable ngx_http_sub_module
+  --with-http_dav_module             enable ngx_http_dav_module
+  --with-http_flv_module             enable ngx_http_flv_module
+  --with-http_gzip_static_module     enable ngx_http_gzip_static_module
+  --with-http_random_index_module    enable ngx_http_random_index_module
+  --with-http_secure_link_module     enable ngx_http_secure_link_module
+  --with-http_degradation_module     enable ngx_http_degradation_module
+  --with-http_stub_status_module     enable ngx_http_stub_status_module
+
+  --without-http_charset_module      disable ngx_http_charset_module
+  --without-http_gzip_module         disable ngx_http_gzip_module
+  --without-http_ssi_module          disable ngx_http_ssi_module
+  --without-http_userid_module       disable ngx_http_userid_module
+  --without-http_access_module       disable ngx_http_access_module
+  --without-http_auth_basic_module   disable ngx_http_auth_basic_module
+  --without-http_autoindex_module    disable ngx_http_autoindex_module
+  --without-http_geo_module          disable ngx_http_geo_module
+  --without-http_map_module          disable ngx_http_map_module
+  --without-http_split_clients_module disable ngx_http_split_clients_module
+  --without-http_referer_module      disable ngx_http_referer_module
+  --without-http_rewrite_module      disable ngx_http_rewrite_module
+  --without-http_proxy_module        disable ngx_http_proxy_module
+  --without-http_fastcgi_module      disable ngx_http_fastcgi_module
+  --without-http_uwsgi_module        disable ngx_http_uwsgi_module
+  --without-http_scgi_module         disable ngx_http_scgi_module
+  --without-http_memcached_module    disable ngx_http_memcached_module
+  --without-http_limit_zone_module   disable ngx_http_limit_zone_module
+  --without-http_limit_req_module    disable ngx_http_limit_req_module
+  --without-http_empty_gif_module    disable ngx_http_empty_gif_module
+  --without-http_browser_module      disable ngx_http_browser_module
+  --without-http_upstream_ip_hash_module
+                                     disable ngx_http_upstream_ip_hash_module
+
+  --with-http_perl_module            enable ngx_http_perl_module
+  --with-perl_modules_path=PATH      set path to the perl modules
+  --with-perl=PATH                   set path to the perl binary
+
+  --http-log-path=PATH               set path to the http access log
+  --http-client-body-temp-path=PATH  set path to the http client request body
+                                     temporary files
+  --http-proxy-temp-path=PATH        set path to the http proxy temporary files
+  --http-fastcgi-temp-path=PATH      set path to the http fastcgi temporary
+                                     files
+  --http-uwsgi-temp-path=PATH        set path to the http uwsgi temporary files
+  --http-scgi-temp-path=PATH         set path to the http scgi temporary files
+
+  --without-http                     disable HTTP server
+  --without-http-cache               disable HTTP cache
+
+  --with-mail                        enable POP3/IMAP4/SMTP proxy module
+  --with-mail_ssl_module             enable ngx_mail_ssl_module
+  --without-mail_pop3_module         disable ngx_mail_pop3_module
+  --without-mail_imap_module         disable ngx_mail_imap_module
+  --without-mail_smtp_module         disable ngx_mail_smtp_module
+
+  --with-google_perftools_module     enable ngx_google_perftools_module
+  --with-cpp_test_module             enable ngx_cpp_test_module
+
+  --add-module=PATH                  enable an external module
+
+  --with-cc=PATH                     set path to C compiler
+  --with-cpp=PATH                    set path to C preprocessor
+  --with-cc-opt=OPTIONS              set additional options for C compiler
+  --with-ld-opt=OPTIONS              set additional options for linker
+  --with-cpu-opt=CPU                 build for specified CPU, the valid values:
+                                     pentium, pentiumpro, pentium3, pentium4,
+                                     athlon, opteron, sparc32, sparc64, ppc64
+
+  --with-make=PATH                   specify the default make utility to be used
+
+  --without-pcre                     disable PCRE library usage
+  --with-pcre                        force PCRE library usage
+  --with-pcre=DIR                    set path to PCRE library sources
+  --with-pcre-opt=OPTIONS            set additional make options for PCRE
+  --with-pcre-conf-opt=OPTIONS       set additional configure options for PCRE
+  --with-pcre-jit                    build PCRE with JIT compilation support
+
+  --with-md5=DIR                     set path to md5 library sources
+  --with-md5-opt=OPTIONS             set additional options for md5 building
+  --with-md5-asm                     use md5 assembler sources
+
+  --with-sha1=DIR                    set path to sha1 library sources
+  --with-sha1-opt=OPTIONS            set additional options for sha1 building
+  --with-sha1-asm                    use sha1 assembler sources
+
+  --with-zlib=DIR                    set path to zlib library sources
+  --with-zlib-opt=OPTIONS            set additional options for zlib building
+  --with-zlib-asm=CPU                use zlib assembler sources optimized
+                                     for specified CPU, the valid values:
+                                     pentium, pentiumpro
+
+  --with-libatomic                   force libatomic_ops library usage
+  --with-libatomic=DIR               set path to libatomic_ops library sources
+
+  --with-openssl=DIR                 set path to OpenSSL library sources
+  --with-openssl-opt=OPTIONS         set additional options for OpenSSL building
+
+  --dry-run                          dry running the configure, for testing only
+  --platform=PLATFORM                forcibly specify a platform name, for testing only
+_EOC_
+
+    if ($retval == 0) {
+        print $msg;
+        exit 0;
+    }
+
+    warn $msg;
+    exit $retval;
+}
+
+sub gen_makefile {
+    open my $out, ">Makefile" or
+        die "Cannot open Makefile for writing: $!\n";
+
+    print $out ".PHONY: all install clean\n\n";
+
+    print $out "all:\n\t" . join("\n\t", @make_cmds) . "\n\n";
+
+    print $out "install: all\n\t" . join("\n\t", @make_install_cmds) . "\n\n";
+
+    print $out "clean:\n\trm -rf build\n";
+
+    close $out;
+}
 
