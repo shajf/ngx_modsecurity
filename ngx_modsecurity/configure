@@ -108,7 +108,7 @@ sub  build_security_opts {
 
     $postamble .= <<"_END_";
 Type the following commands to build and install:
-    $make
+    $make 
     $make install
 _END_
 
