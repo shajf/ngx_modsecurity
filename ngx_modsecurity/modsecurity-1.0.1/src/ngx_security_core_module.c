@@ -19,6 +19,53 @@
 
 static ngx_command_t ngx_security_core_commands[] = {
 
+    {   ngx_string("sec_engine"),
+        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG|NGX_HTTP_SIF_CONF|NGX_HTTP_LIF_CONF,
+        ngx_security_engine,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        offsetof(ngx_http_security_core_loc_conf_t,enable_sec_engine),
+        NULL},
+
+    {   ngx_string("lua_package_path"),
+        NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_security_lua_path,
+        NGX_HTTP_MAIN_CONF_OFFSET,
+        0,
+        NULL
+    },
+    
+    {   ngx_string("lua_package_cpath"),
+        NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+        ngx_security_lua_cpath,
+        NGX_HTTP_MAIN_CONF_OFFSET,
+        0,
+        NULL
+    },
+
+    {   ngx_string("sec_lua"),
+        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+        ngx_security_load_lua_string,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        0,
+        NULL
+    },
+
+    {   ngx_string("sec_lua_file"),
+        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+        ngx_security_load_lua_file,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        0,
+        NULL
+    },
+    
+    {   ngx_string("sec_lua_path"),
+        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+        ngx_security_load_luas_from_path,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        0,
+        NULL
+    },
+
     ngx_null_command
 };
 
