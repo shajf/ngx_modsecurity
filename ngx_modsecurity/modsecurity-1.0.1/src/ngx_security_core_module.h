@@ -34,6 +34,9 @@ struct ngx_http_security_core_srv_conf_s{
 struct ngx_http_security_core_loc_conf_s{
     
     ngx_flag_t enable_sec_engine;
+
+	ngx_array_t policies; 
+
 };
 
 

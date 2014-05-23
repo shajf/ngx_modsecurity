@@ -29,6 +29,8 @@ struct ngx_security_engine_s {
 
 
 struct ngx_security_context_s {
+	
+	ngx_http_request_t *r;
 
 };
 

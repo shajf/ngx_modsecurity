@@ -42,31 +42,15 @@ static ngx_command_t ngx_security_core_commands[] = {
         NULL
     },
 
-    {   ngx_string("sec_lua"),
+    {   ngx_string("sec_policy"),
         NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-        ngx_security_load_lua_string,
+        ngx_security_policy,
         NGX_HTTP_LOC_CONF_OFFSET,
         0,
         NULL
     },
-
-    {   ngx_string("sec_lua_file"),
-        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-        ngx_security_load_lua_file,
-        NGX_HTTP_LOC_CONF_OFFSET,
-        0,
-        NULL
-    },
-    
-    {   ngx_string("sec_lua_path"),
-        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-        ngx_security_load_luas_from_path,
-        NGX_HTTP_LOC_CONF_OFFSET,
-        0,
-        NULL
-    },
-
-    ngx_null_command
+	
+	ngx_null_command
 };
 
 static ngx_http_module_t ngx_security_core_module_ctx = {
