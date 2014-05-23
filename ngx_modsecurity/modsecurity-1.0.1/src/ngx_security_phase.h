@@ -17,6 +17,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 
-ngx_status_t ngx_security_phase_setup();
+ngx_int_t ngx_security_phase_setup(ngx_conf_t *cf);
+
 #endif /*NGX_SECURITY_PHASE_H*/
 

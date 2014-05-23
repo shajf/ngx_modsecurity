@@ -24,7 +24,7 @@ typedef struct ngx_security_context_s ngx_security_context_t;
 
 
 struct ngx_security_engine_s {
-
+	
 };
 
 
